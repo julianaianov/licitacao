@@ -86,3 +86,8 @@ class FornecedoresScraper:
         return resultados
 
 
+
+
+
+
+

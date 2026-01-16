@@ -11,6 +11,9 @@ Sistema automatizado para coleta e análise de licitações públicas de diverso
 - ✅ Download em múltiplos formatos (CSV, Excel, JSON)
 - ✅ Sistema de cache e histórico
 - ✅ Busca por palavra-chave e período
+- ✅ Integrações PNCP (Lei 14.133/21)
+- ✅ Endpoints do módulo legado (Comprasnet) por período e por ID
+- ✅ Consulta de fornecedores (módulo fornecedor)
 
 ## 🚀 Instalação
 
@@ -84,7 +87,16 @@ A aplicação abrirá automaticamente no navegador em `http://localhost:8501`
 3. **Defina o período** de busca
 4. Clique em **"🚀 Iniciar Varredura"**
 
-### 3. Visualizar e Baixar Resultados
+### 3. Recursos adicionais na barra lateral
+
+- PNCP (Lei 14.133/21): marque “PNCP” para coletar contratações do endpoint oficial.
+- Módulo Legado (Comprasnet):
+  - Itens de Pregões por ID: informe `id_compra` (opcional `id_compra_item`, `dt_alteracao`).
+  - Licitação por ID: informe `id_compra` (opcional `dt_alteracao`).
+  - Pregão por ID: informe `id_compra` (opcional `dt_alteracao`).
+- Fornecedor (módulo fornecedor): marque, escolha “Ativo?”, e preencha filtros (CNPJ/CPF/natureza jurídica/porte/CNAE). Observação: apenas registros com CNPJ são persistidos no schema atual.
+
+### 4. Visualizar e Baixar Resultados
 
 - Os resultados aparecem em uma tabela interativa
 - Use os filtros para refinar a visualização
@@ -128,6 +140,50 @@ self.connection_params = {
 17. BNC
 18. PNCP (Portal Nacional de Contratações Públicas)
 
+## 🧠 Módulos e Endpoints Integrados
+
+- Comprasnet (módulo legado):
+  - 1_consultarLicitacao (por período; usado no `ComprasnetScraper` com fallback CKAN/CSV)
+  - 1.1_consultarLicitacao_Id (por ID)
+  - 3.1_consultarPregoes_Id (por ID)
+  - 4.1_consultarItensPregoes_Id (itens de pregão por ID)
+- PNCP (Lei 14.133/21):
+  - modulo-contratacoes: `1_consultarContratacoes_PNCP_14133` (paginação e filtro por período/modalidade)
+- CKAN (compras.dados.gov.br):
+  - datasets `licitacoes`, `itens_licitacao`, `contratos`, `fornecedores` (preferindo DataStore SQL)
+- Módulo Fornecedor:
+  - modulo-fornecedor: `1_consultarFornecedor` (filtros por CNPJ/CPF/natureza/porte/CNAE/ativo)
+
+## 🗺️ Fluxograma do Sistema
+
+```mermaid
+flowchart TD
+  UI[Streamlit UI] -->|Seleciona portais/filtros| CTRL[Orquestrador (app.py)]
+  CTRL -->|Comprasnet (período)| S1[ComprasnetScraper\nmodulo-legado + CKAN]
+  CTRL -->|Portal Compras Públicas| S2[PortalComprasScraper]
+  CTRL -->|Licitações-e| S3[LicitacoesScraper]
+  CTRL -->|PNCP 14.133| S4[Pncp14133Scraper]
+  CTRL -->|Licitação por ID| S5[LicitacaoIdScraper]
+  CTRL -->|Pregão por ID| S6[PregoesIdScraper]
+  CTRL -->|Itens pregão por ID| S7[ItensPregoesIdScraper]
+  CTRL -->|Itens (CKAN)| S8[ItensLicitacaoScraper]
+  CTRL -->|Contratos (CKAN)| S9[ContratosScraper]
+  CTRL -->|Fornecedores (CKAN)| S10[FornecedoresScraper]
+  CTRL -->|Fornecedor (módulo)| S11[ModuloFornecedorScraper]
+  S1 --> DB[(PostgreSQL)]
+  S2 --> DB
+  S3 --> DB
+  S4 --> DB
+  S5 --> DB
+  S6 --> DB
+  S7 --> DB
+  S8 --> DB
+  S9 --> DB
+  S10 --> DB
+  S11 --> DB
+  DB -->|Consulta/Exporta CSV/Excel/JSON| UI
+```
+
 ## 🛠️ Desenvolvimento
 
 ### Estrutura do Projeto
@@ -140,7 +196,15 @@ self.connection_params = {
 ├── scrapers/
 │   ├── comprasnet_scraper.py      # Scraper Comprasnet
 │   ├── portal_compras_scraper.py  # Scraper Portal Compras
-│   └── licitacoes_scraper.py      # Scraper Licitações-e
+│   ├── licitacoes_scraper.py      # Scraper Licitações-e
+│   ├── pncp_14133_scraper.py      # Scraper PNCP (Lei 14.133/21)
+│   ├── itens_pregoes_id_scraper.py# Itens de pregões por ID (legado)
+│   ├── licitacao_id_scraper.py    # Licitação por ID (legado)
+│   ├── pregoes_id_scraper.py      # Pregão por ID (legado)
+│   ├── itens_licitacao_scraper.py # Itens (CKAN)
+│   ├── contratos_scraper.py       # Contratos (CKAN)
+│   ├── fornecedores_scraper.py    # Fornecedores (CKAN)
+│   └── modulo_fornecedor_scraper.py # Fornecedor (módulo fornecedor)
 ├── scripts/
 │   └── create_database.sql        # Script de criação do BD
 ├── requirements.txt               # Dependências Python

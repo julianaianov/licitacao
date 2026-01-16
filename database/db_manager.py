@@ -194,3 +194,33 @@ class DatabaseManager:
         """Fecha a conexão com o banco"""
         if self.conn:
             self.conn.close()
+
+    def insert_documento(self, doc: Dict) -> bool:
+        """Insere/atualiza registro de documento (edital/anexo)."""
+        if not self.conn:
+            return False
+        try:
+            cursor = self.conn.cursor()
+            query = """
+                INSERT INTO documentos (
+                    portal, numero_controle, id_compra, ano_compra, sequencial_compra,
+                    tipo_documento, nome_arquivo, url, caminho_local, tamanho_bytes,
+                    sha256, data_publicacao
+                ) VALUES (
+                    %(portal)s, %(numero_controle)s, %(id_compra)s, %(ano_compra)s, %(sequencial_compra)s,
+                    %(tipo_documento)s, %(nome_arquivo)s, %(url)s, %(caminho_local)s, %(tamanho_bytes)s,
+                    %(sha256)s, %(data_publicacao)s
+                )
+                ON CONFLICT (url) DO UPDATE SET
+                    caminho_local = EXCLUDED.caminho_local,
+                    tamanho_bytes = EXCLUDED.tamanho_bytes,
+                    sha256 = EXCLUDED.sha256,
+                    data_publicacao = COALESCE(EXCLUDED.data_publicacao, documentos.data_publicacao),
+                    data_atualizacao = CURRENT_TIMESTAMP
+            """
+            cursor.execute(query, doc)
+            cursor.close()
+            return True
+        except Exception as e:
+            print(f"Erro ao inserir documento: {e}")
+            return False

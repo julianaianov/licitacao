@@ -123,3 +123,25 @@ CREATE TABLE IF NOT EXISTS fornecedores (
     data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Documentos (editais/anexos)
+CREATE TABLE IF NOT EXISTS documentos (
+    id SERIAL PRIMARY KEY,
+    portal VARCHAR(100) NOT NULL,                 -- Ex: 'PNCP 14133'
+    numero_controle VARCHAR(100),                 -- PNCP: numeroControlePNCP (quando disponível)
+    id_compra VARCHAR(100),                       -- PNCP: idCompra (quando disponível)
+    ano_compra INTEGER,                           -- PNCP: anoCompraPncp
+    sequencial_compra INTEGER,                    -- PNCP: sequencialCompraPncp
+    tipo_documento VARCHAR(200),                  -- Ex: 'INSTRUMENTO_CONVOCATORIO', 'ANEXO', etc.
+    nome_arquivo VARCHAR(500),
+    url TEXT,                                     -- URL pública de download (quando houver)
+    caminho_local TEXT,                           -- Caminho salvo em disco (quando baixado)
+    tamanho_bytes BIGINT,
+    sha256 VARCHAR(64),
+    data_publicacao TIMESTAMP,
+    data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_documento_url UNIQUE (url)
+);
+CREATE INDEX IF NOT EXISTS idx_documentos_portal ON documentos(portal);
+CREATE INDEX IF NOT EXISTS idx_documentos_numero ON documentos(numero_controle);

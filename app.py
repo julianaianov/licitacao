@@ -8,6 +8,12 @@ from scrapers.licitacoes_scraper import LicitacoesScraper
 from scrapers.itens_licitacao_scraper import ItensLicitacaoScraper
 from scrapers.contratos_scraper import ContratosScraper
 from scrapers.fornecedores_scraper import FornecedoresScraper
+from scrapers.pncp_14133_scraper import Pncp14133Scraper
+from scrapers.itens_pregoes_id_scraper import ItensPregoesIdScraper
+from scrapers.licitacao_id_scraper import LicitacaoIdScraper
+from scrapers.pregoes_id_scraper import PregoesIdScraper
+from scrapers.modulo_fornecedor_scraper import ModuloFornecedorScraper
+from scrapers.pncp_documentos_scraper import PncpDocumentosScraper
 import io
 
 # Configuração da página
@@ -75,6 +81,36 @@ with st.sidebar:
     incluir_fornecedores = st.checkbox("Incluir Fornecedores (CKAN)", value=False)
     
     st.markdown("---")
+    st.subheader("📦 Itens de Pregões por ID (módulo legado)")
+    incluir_itens_legado_id = st.checkbox("Incluir Itens de Pregões por ID (módulo legado)", value=False)
+    id_compra_legado = st.text_input("id_compra (obrigatório)", value="")
+    id_compra_item_legado = st.text_input("id_compra_item (opcional)", value="")
+    dt_alteracao_legado = st.text_input("dt_alteracao (opcional, YYYY-MM-DD ou ISO)", value="")
+    st.caption("Dica: preencha apenas id_compra para trazer todos os itens desse pregão.")
+    
+    st.subheader("📄 Licitação por ID (módulo legado)")
+    incluir_licitacao_legado_id = st.checkbox("Incluir Licitação por ID (módulo legado)", value=False)
+    id_compra_licitacao = st.text_input("id_compra (licitação)", value="")
+    dt_alteracao_licitacao = st.text_input("dt_alteracao (opcional, licitação)", value="")
+    
+    st.subheader("📣 Pregão por ID (módulo legado)")
+    incluir_pregao_legado_id = st.checkbox("Incluir Pregão por ID (módulo legado)", value=False)
+    id_compra_pregao = st.text_input("id_compra (pregão)", value="")
+    dt_alteracao_pregao = st.text_input("dt_alteracao (opcional, pregão)", value="")
+    
+    st.subheader("🏢 Fornecedor (módulo fornecedor)")
+    incluir_modulo_fornecedor = st.checkbox("Incluir Fornecedor (módulo fornecedor)", value=False)
+    fornecedor_ativo = st.checkbox("Fornecedor ativo?", value=True)
+    fornecedor_cnpj = st.text_input("CNPJ (opcional)", value="")
+    fornecedor_cpf = st.text_input("CPF (opcional)", value="")
+    fornecedor_nat_jur = st.text_input("naturezaJuridicaId (opcional)", value="")
+    fornecedor_porte = st.text_input("porteEmpresaId (opcional)", value="")
+    fornecedor_cnae = st.text_input("codigoCnae (opcional)", value="")
+    
+    st.subheader("📎 Editais PNCP (PDF)")
+    baixar_editais_pncp = st.checkbox("Baixar e salvar editais PNCP (quando disponíveis)", value=False)
+    
+    st.markdown("---")
     
     # Botão de iniciar varredura
     iniciar_varredura = st.button("🚀 Iniciar Varredura", type="primary", use_container_width=True)
@@ -120,6 +156,29 @@ if iniciar_varredura:
                 elif portal == "Licitações-e":
                     scraper = LicitacoesScraper()
                     resultados = scraper.buscar(palavra_chave, data_inicial, data_final)
+                elif portal == "PNCP":
+                    scraper = Pncp14133Scraper()
+                    resultados = scraper.buscar(palavra_chave, data_inicial, data_final)
+                    # Baixar documentos PNCP (best-effort)
+                    if baixar_editais_pncp and resultados:
+                        try:
+                            status_text.text("📎 Baixando editais PNCP (PDF)...")
+                            doc_scraper = PncpDocumentosScraper()
+                            total_docs = 0
+                            for lic in resultados:
+                                meta = lic.get("pncp_meta") or {}
+                                if not meta:
+                                    continue
+                                docs = doc_scraper.buscar_documentos(meta, base_export_dir="export")
+                                for d in docs:
+                                    if db.insert_documento(d):
+                                        total_docs += 1
+                            if total_docs > 0:
+                                st.success(f"✅ Documentos PNCP inseridos/atualizados: {total_docs}")
+                            else:
+                                st.info("ℹ️ Nenhum documento PNCP encontrado para os registros retornados.")
+                        except Exception as e:
+                            st.error(f"❌ Erro ao baixar documentos PNCP: {str(e)}")
                 else:
                     # Placeholder para outros portais
                     resultados = []
@@ -177,6 +236,89 @@ if iniciar_varredura:
                 st.success(f"✅ Fornecedores inseridos/atualizados: {upserts}")
             except Exception as e:
                 st.error(f"❌ Erro ao buscar fornecedores CKAN: {str(e)}")
+        
+        # Fornecedor (módulo fornecedor)
+        if incluir_modulo_fornecedor and fornecedor_ativo is not None:
+            try:
+                status_text.text("🏢 Buscando Fornecedores (módulo fornecedor)...")
+                mod_forn = ModuloFornecedorScraper()
+                def to_int_or_none(s: str):
+                    s = (s or "").strip()
+                    try:
+                        return int(s) if s else None
+                    except Exception:
+                        return None
+                fornecedores_mod = mod_forn.buscar(
+                    ativo=bool(fornecedor_ativo),
+                    cnpj=fornecedor_cnpj.strip() or None,
+                    cpf=fornecedor_cpf.strip() or None,
+                    naturezaJuridicaId=to_int_or_none(fornecedor_nat_jur),
+                    porteEmpresaId=to_int_or_none(fornecedor_porte),
+                    codigoCnae=to_int_or_none(fornecedor_cnae),
+                )
+                upserts_mod = 0
+                for fm in fornecedores_mod:
+                    if db.upsert_fornecedor(fm):
+                        upserts_mod += 1
+                st.success(f"✅ Fornecedores (módulo) inseridos/atualizados: {upserts_mod}")
+            except Exception as e:
+                st.error(f"❌ Erro ao buscar fornecedores (módulo fornecedor): {str(e)}")
+        
+        # Itens de Pregões por ID (módulo legado)
+        if incluir_itens_legado_id and id_compra_legado.strip():
+            try:
+                status_text.text("🧩 Buscando Itens de Pregões por ID (módulo legado)...")
+                itens_id_scraper = ItensPregoesIdScraper()
+                itens_id = itens_id_scraper.buscar(
+                    id_compra=id_compra_legado.strip(),
+                    id_compra_item=id_compra_item_legado.strip() or None,
+                    dt_alteracao=dt_alteracao_legado.strip() or None
+                )
+                inseridos_legado = 0
+                for it in itens_id:
+                    if db.insert_item_licitacao(it):
+                        inseridos_legado += 1
+                st.success(f"✅ Itens (módulo legado por ID) inseridos/atualizados: {inseridos_legado}")
+            except Exception as e:
+                st.error(f"❌ Erro ao buscar Itens por ID (módulo legado): {str(e)}")
+        
+        # Licitação por ID (módulo legado)
+        if incluir_licitacao_legado_id and id_compra_licitacao.strip():
+            try:
+                status_text.text("📄 Buscando Licitação por ID (módulo legado)...")
+                lic_id_scraper = LicitacaoIdScraper()
+                lic_rows = lic_id_scraper.buscar(
+                    id_compra=id_compra_licitacao.strip(),
+                    palavra_chave=palavra_chave or "",
+                    dt_alteracao=dt_alteracao_licitacao.strip() or None
+                )
+                inseridos_lic = 0
+                for lic in lic_rows:
+                    if db.insert_licitacao(lic):
+                        inseridos_lic += 1
+                        licitacoes_encontradas.append(lic)
+                st.success(f"✅ Licitações (módulo legado por ID) inseridas/atualizadas: {inseridos_lic}")
+            except Exception as e:
+                st.error(f"❌ Erro ao buscar Licitação por ID (módulo legado): {str(e)}")
+        
+        # Pregão por ID (módulo legado)
+        if incluir_pregao_legado_id and id_compra_pregao.strip():
+            try:
+                status_text.text("📣 Buscando Pregão por ID (módulo legado)...")
+                prg_id_scraper = PregoesIdScraper()
+                prg_rows = prg_id_scraper.buscar(
+                    id_compra=id_compra_pregao.strip(),
+                    palavra_chave=palavra_chave or "",
+                    dt_alteracao=dt_alteracao_pregao.strip() or None
+                )
+                inseridos_prg = 0
+                for prg in prg_rows:
+                    if db.insert_licitacao(prg):
+                        inseridos_prg += 1
+                        licitacoes_encontradas.append(prg)
+                st.success(f"✅ Pregões (módulo legado por ID) inseridos/atualizados: {inseridos_prg}")
+            except Exception as e:
+                st.error(f"❌ Erro ao buscar Pregão por ID (módulo legado): {str(e)}")
         
         status_text.text("✅ Varredura concluída!")
         st.success(f"🎉 Foram encontradas {len(licitacoes_encontradas)} licitações!")
