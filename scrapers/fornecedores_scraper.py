@@ -91,3 +91,11 @@ class FornecedoresScraper:
 
 
 
+
+
+
+
+
+
+
+

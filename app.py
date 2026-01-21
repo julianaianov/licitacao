@@ -14,7 +14,18 @@ from scrapers.licitacao_id_scraper import LicitacaoIdScraper
 from scrapers.pregoes_id_scraper import PregoesIdScraper
 from scrapers.modulo_fornecedor_scraper import ModuloFornecedorScraper
 from scrapers.pncp_documentos_scraper import PncpDocumentosScraper
+from scrapers.pncp_api_scraper import PncpApiScraper
+from scrapers.compras_gov_documentos_scraper import ComprasGovDocumentosScraper
+from scrapers.comprasnet_edital_downloader import baixar_e_registrar as comprasnet_baixar_edital
+from scrapers.pncp_to_comprasnet import extract_trio_from_pncp
+from scrapers.pncp_api_arquivos import baixar_todos_por_numero as pncp_api_baixar_todos
 import io
+import base64
+import streamlit.components.v1 as components
+import re
+import os
+import base64
+import streamlit.components.v1 as components
 
 # Configuração da página
 st.set_page_config(
@@ -110,6 +121,25 @@ with st.sidebar:
     st.subheader("📎 Editais PNCP (PDF)")
     baixar_editais_pncp = st.checkbox("Baixar e salvar editais PNCP (quando disponíveis)", value=False)
     
+    st.subheader("📎 Editais Compras.gov (HTML→PDF)")
+    baixar_compras_gov = st.checkbox("Baixar e salvar editais do Compras.gov (por aviso/UASG)", value=False)
+    compras_gov_aviso = st.text_input("numero_aviso (Compras.gov)", value="")
+    compras_gov_uasg = st.text_input("UASG (opcional, Compras.gov)", value="")
+    
+    st.subheader("📎 Edital Comprasnet (download direto ASP)")
+    comprasnet_coduasg = st.text_input("coduasg", value="")
+    comprasnet_numprp = st.text_input("numprp", value="")
+    comprasnet_modprp = st.text_input("modprp", value="")
+    acionar_comprasnet_download = st.button("⬇️ Baixar Edital (Comprasnet ASP)", use_container_width=True)
+    
+    st.subheader("🔄 PNCP → Comprasnet (auto)")
+    pncp_numero_controle = st.text_input("numeroControlePNCP (auto-extrair trio e baixar)", value="")
+    acionar_pncp_auto = st.button("🔎 Extrair e baixar (PNCP → Comprasnet)", use_container_width=True)
+    
+    st.subheader("📎 PNCP API (arquivos por numeroControlePNCP)")
+    pncp_api_numero = st.text_input("numeroControlePNCP (PNCP API arquivos)", value="")
+    acionar_pncp_api = st.button("⬇️ Baixar todos (PNCP API arquivos)", use_container_width=True)
+    
     st.markdown("---")
     
     # Botão de iniciar varredura
@@ -164,8 +194,27 @@ if iniciar_varredura:
                         try:
                             status_text.text("📎 Baixando editais PNCP (PDF)...")
                             doc_scraper = PncpDocumentosScraper()
+                            api_list_scraper = PncpApiScraper()
                             total_docs = 0
+                            # 1) Tentar direto a partir dos resultados 14133 (se trouxerem pncp_meta)
                             for lic in resultados:
+                                meta = lic.get("pncp_meta") or {}
+                                if not meta:
+                                    continue
+                                docs = doc_scraper.buscar_documentos(meta, base_export_dir="export")
+                                for d in docs:
+                                    if db.insert_documento(d):
+                                        total_docs += 1
+                            # 2) Listar também via API oficial PNCP (datas do período) e baixar documentos
+                            status_text.text("📎 PNCP API: listando contratações por período para baixar documentos...")
+                            api_list = api_list_scraper.buscar(
+                                palavra_chave=palavra_chave or "",
+                                data_inicial=data_inicial,
+                                data_final=data_final,
+                                modalidade="",  # sem restringir para maximizar documentos
+                                situacao=""     # idem
+                            )
+                            for lic in api_list:
                                 meta = lic.get("pncp_meta") or {}
                                 if not meta:
                                     continue
@@ -326,6 +375,65 @@ if iniciar_varredura:
         # Recarregar a página para atualizar as métricas
         st.rerun()
 
+# Acionadores independentes (Compras.gov) caso usuário queira apenas baixar por aviso/UASG
+if not iniciar_varredura and baixar_compras_gov and compras_gov_aviso.strip():
+    st.info("Executando download de edital(s) no Compras.gov...")
+    try:
+        cg_scraper = ComprasGovDocumentosScraper()
+        docs = cg_scraper.buscar_documentos(
+            numero_aviso=compras_gov_aviso.strip(),
+            uasg=(compras_gov_uasg.strip() or None),
+            base_export_dir="export"
+        )
+        inseridos = 0
+        for d in docs:
+            if db.insert_documento(d):
+                inseridos += 1
+        if inseridos > 0:
+            st.success(f"✅ Documentos (Compras.gov) inseridos/atualizados: {inseridos}")
+        else:
+            st.info("ℹ️ Nenhum PDF localizado nas páginas consultadas do Compras.gov para este aviso/UASG.")
+    except Exception as e:
+        st.error(f"❌ Erro ao buscar editais do Compras.gov: {str(e)}")
+
+# Comprasnet download direto
+if not iniciar_varredura and acionar_comprasnet_download and comprasnet_coduasg.strip() and comprasnet_numprp.strip() and comprasnet_modprp.strip():
+    try:
+        ok = comprasnet_baixar_edital(comprasnet_coduasg.strip(), comprasnet_numprp.strip(), comprasnet_modprp.strip())
+        if ok:
+            st.success("✅ Edital (Comprasnet) baixado e registrado.")
+        else:
+            st.info("ℹ️ Não foi possível baixar o edital com os parâmetros informados.")
+    except Exception as e:
+        st.error(f"❌ Erro ao baixar edital (Comprasnet): {str(e)}")
+
+# PNCP → Comprasnet auto
+if not iniciar_varredura and acionar_pncp_auto and pncp_numero_controle.strip():
+    try:
+        trio = extract_trio_from_pncp(pncp_numero_controle.strip())
+        if trio:
+            c, n, m = trio
+            ok = comprasnet_baixar_edital(c, n, m)
+            if ok:
+                st.success(f"✅ Trio extraído: coduasg={c}, numprp={n}, modprp={m}. Edital baixado e registrado.")
+            else:
+                st.info(f"ℹ️ Trio extraído: coduasg={c}, numprp={n}, modprp={m}, mas o download falhou.")
+        else:
+            st.info("ℹ️ Não foi possível extrair (coduasg,numprp,modprp) a partir do PNCP para esse número de controle.")
+    except Exception as e:
+        st.error(f"❌ Erro PNCP→Comprasnet: {str(e)}")
+
+# PNCP API arquivos direto
+if not iniciar_varredura and acionar_pncp_api and pncp_api_numero.strip():
+    try:
+        saved = pncp_api_baixar_todos(pncp_api_numero.strip())
+        if saved:
+            st.success(f"✅ Documentos baixados via PNCP API: {saved}")
+        else:
+            st.info("ℹ️ Nenhum arquivo retornado pela PNCP API para esse número de controle.")
+    except Exception as e:
+        st.error(f"❌ Erro PNCP API (arquivos): {str(e)}")
+
 # Exibir resultados
 st.subheader("📊 Resultados da Varredura")
 
@@ -398,6 +506,110 @@ if not licitacoes_df.empty:
         )
 else:
     st.info("ℹ️ Nenhuma licitação encontrada. Inicie uma varredura para buscar dados.")
+
+# Ações por licitação (baixar documentos a partir da lista)
+if not licitacoes_df.empty:
+    st.markdown("---")
+    st.subheader("⚙️ Ações por Licitação (baixar documentos)")
+    st.caption("Para licitações PNCP, tentamos primeiro a PNCP API (arquivos); se não houver, tentamos PNCP→Comprasnet automaticamente.")
+    max_rows = min(30, len(licitacoes_df))
+    for idx in range(max_rows):
+        row = licitacoes_df.iloc[idx]
+        c1, c2, c3, c4 = st.columns([3, 3, 2, 2], gap="small")
+        with c1:
+            st.write(f"{row.get('portal','')} | {str(row.get('numero',''))[:60]}")
+        with c2:
+            st.write(str(row.get('titulo',''))[:60])
+        with c3:
+            if st.button("⬇️ Baixar docs", key=f"baixar_docs_{idx}"):
+                numero_raw = str(row.get('numero','') or "")
+                # Tentar extrair numeroControlePNCP do campo numero (padrão CNPJ-?-SEQ/ANO)
+                m = re.match(r"^(\d{14})-\d-(\d{6})/(\d{4})$", numero_raw)
+                downloaded = 0
+                try:
+                    if m:
+                        numero_ctrl = numero_raw
+                        downloaded = pncp_api_baixar_todos(numero_ctrl)
+                    if not downloaded:
+                        # Fallback PNCP→Comprasnet, se possível a partir do numero controle no título/descricao (pior cenário)
+                        numero_hint = numero_raw
+                        if not m:
+                            # tentar achar em titulo/descricao
+                            for src in [str(row.get('descricao','') or ""), str(row.get('titulo','') or "")]:
+                                mm = re.search(r"(\d{14})-\d-(\d{6})/(\d{4})", src)
+                                if mm:
+                                    numero_hint = mm.group(0)
+                                    break
+                        if numero_hint:
+                            trio = extract_trio_from_pncp(numero_hint)
+                            if trio:
+                                c, n, m2 = trio
+                                ok = comprasnet_baixar_edital(c, n, m2)
+                                downloaded = 1 if ok else 0
+                except Exception as e:
+                    st.error(f"Erro ao baixar documentos: {e}")
+                    downloaded = 0
+                if downloaded:
+                    st.success("✅ Documentos baixados/registrados.")
+                    # Propagar filtro para a seção de documentos
+                    st.session_state["doc_filter_numero"] = numero_raw
+                else:
+                    st.info("ℹ️ Nenhum documento encontrado via PNCP API / fallback neste item.")
+        with c4:
+            if st.button("👁️ Ver docs", key=f"ver_docs_{idx}"):
+                st.session_state["doc_filter_numero"] = str(row.get('numero','') or "")
+                st.experimental_rerun()
+
+# Documentos baixados
+st.markdown("---")
+st.subheader("📄 Documentos Baixados")
+col_doc1, col_doc2, col_doc3 = st.columns(3)
+with col_doc1:
+    filtro_numero_controle = st.text_input("numeroControlePNCP", value=st.session_state.get("doc_filter_numero",""))
+with col_doc2:
+    filtro_portal_doc = st.selectbox("Portal", options=["", "PNCP 14133", "Compras.gov"], index=0)
+with col_doc3:
+    limite_docs = st.number_input("Limite", min_value=10, max_value=500, value=100, step=10)
+
+docs_df = db.get_documentos(
+    numero_controle=(filtro_numero_controle.strip() or None),
+    portal=(filtro_portal_doc if filtro_portal_doc else None),
+    limit=int(limite_docs)
+)
+
+if not docs_df.empty:
+    st.dataframe(docs_df[["portal", "numero_controle", "tipo_documento", "nome_arquivo", "data_criacao"]], use_container_width=True, height=300)
+    st.markdown("#### 💾 Baixar arquivo")
+    for _, row in docs_df.iterrows():
+        try:
+            with open(str(row["caminho_local"]), "rb") as f:
+                st.download_button(
+                    label=f"📥 {row['nome_arquivo']} ({row['portal']})",
+                    data=f.read(),
+                    file_name=row["nome_arquivo"],
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+            # Botão de visualizar (inline)
+            if st.button(f"👁️ Visualizar {row['nome_arquivo']}", key=f"view_doc_{int(row['id'])}"):
+                st.session_state["doc_preview_path"] = str(row["caminho_local"])
+        except Exception as e:
+            st.warning(f"Arquivo não disponível: {row['caminho_local']}")
+    # Visualização embutida de PDF ao clicar no botão "Visualizar"
+    if "doc_preview_path" in st.session_state and st.session_state["doc_preview_path"]:
+        path = st.session_state["doc_preview_path"]
+        st.markdown("#### 👁️ Visualizar PDF")
+        try:
+            with open(path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+            components.html(
+                f"<iframe src='data:application/pdf;base64,{b64}' width='100%' height='800px' style='border:none;'></iframe>",
+                height=820
+            )
+        except Exception:
+            st.warning(f"Não foi possível abrir o arquivo: {path}")
+else:
+    st.info("ℹ️ Nenhum documento encontrado no banco.")
 
 # Footer
 st.markdown("---")

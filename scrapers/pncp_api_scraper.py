@@ -60,7 +60,11 @@ class PncpApiScraper:
         modalidade = rec.get("modalidade") or ""
         situacao = rec.get("situacao") or ""
         objeto = rec.get("objeto") or ""
-        orgao_nome = (rec.get("orgao") or {}).get("nome") if isinstance(rec.get("orgao"), dict) else (rec.get("orgao") or "")
+        orgao = rec.get("orgao") or {}
+        orgao_nome = orgao.get("nome") if isinstance(orgao, dict) else (rec.get("orgao") or "")
+        orgao_cnpj = None
+        if isinstance(orgao, dict):
+            orgao_cnpj = orgao.get("cnpj") or orgao.get("cpfCnpj") or orgao.get("documento")
         ano = rec.get("ano")
         sequencial = rec.get("sequencial")
 
@@ -82,6 +86,7 @@ class PncpApiScraper:
                 "anoCompraPncp": ano,
                 "sequencialCompraPncp": sequencial,
                 "idCompra": rec.get("id"),  # se existir
+                "orgaoEntidadeCnpj": orgao_cnpj,
             }
         }
 

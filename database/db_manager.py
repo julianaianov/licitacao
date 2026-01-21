@@ -224,3 +224,26 @@ class DatabaseManager:
         except Exception as e:
             print(f"Erro ao inserir documento: {e}")
             return False
+
+    def get_documentos(self, numero_controle: Optional[str] = None,
+                       portal: Optional[str] = None,
+                       limit: int = 100) -> pd.DataFrame:
+        """Retorna documentos baixados com filtros opcionais."""
+        if not self.conn:
+            return pd.DataFrame()
+        try:
+            query = "SELECT id, portal, numero_controle, tipo_documento, nome_arquivo, caminho_local, url, data_publicacao, data_criacao FROM documentos WHERE 1=1"
+            params: list = []
+            if numero_controle:
+                query += " AND numero_controle = %s"
+                params.append(numero_controle)
+            if portal:
+                query += " AND portal = %s"
+                params.append(portal)
+            query += " ORDER BY data_criacao DESC NULLS LAST LIMIT %s"
+            params.append(limit)
+            df = pd.read_sql_query(query, self.conn, params=params)
+            return df
+        except Exception as e:
+            print(f"Erro ao buscar documentos: {e}")
+            return pd.DataFrame()

@@ -112,3 +112,11 @@ class ModuloFornecedorScraper:
 
 
 
+
+
+
+
+
+
+
+

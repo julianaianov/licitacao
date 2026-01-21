@@ -108,3 +108,11 @@ class LicitacaoIdScraper:
 
 
 
+
+
+
+
+
+
+
+

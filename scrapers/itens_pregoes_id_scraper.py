@@ -110,3 +110,11 @@ class ItensPregoesIdScraper:
 
 
 
+
+
+
+
+
+
+
+
