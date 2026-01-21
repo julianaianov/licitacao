@@ -39,6 +39,12 @@ def get_db_manager():
     return DatabaseManager()
 
 db = get_db_manager()
+# Remover silenciosamente registros fictícios de execuções antigas
+try:
+    if hasattr(db, "cleanup_demo_data"):
+        db.cleanup_demo_data()
+except Exception:
+    pass
 
 # Título
 st.title("🤖 Robô de Varredura de Licitações - Brasil")
@@ -127,7 +133,6 @@ with st.sidebar:
     # Botões de busca
     iniciar_varredura = st.button("🚀 Iniciar Varredura (legado)", use_container_width=True)
     buscar_pncp_btn = st.button("🔎 Buscar Licitações PNCP", use_container_width=True)
-    limpar_demo_btn = st.button("🧹 Limpar dados fictícios", use_container_width=True)
 
 # Main content
 col1, col2, col3 = st.columns(3)
@@ -195,11 +200,6 @@ if buscar_pncp_btn:
     except Exception as e:
         st.error(f"❌ Erro ao consultar PNCP: {e}")
 
-# Limpar dados fictícios
-if limpar_demo_btn:
-    removed = db.cleanup_demo_data()
-    st.success(f"✅ Registros fictícios removidos: {removed}")
-    st.rerun()
 
 # Executar varredura (legado)
 if iniciar_varredura:
@@ -493,6 +493,15 @@ licitacoes_df = db.get_licitacoes(
     status=filtro_status if filtro_status else None,
     palavra_chave=palavra_chave if palavra_chave else None
 )
+# Remover quaisquer registros fictícios remanescentes na visualização
+if not licitacoes_df.empty:
+    try:
+        mask_portal = ~licitacoes_df["portal"].isin(["Licitações-e", "Comprasnet", "Portal de Compras Públicas"])
+        mask_num = ~licitacoes_df["numero"].astype(str).str.startswith(("LICE-", "COMP-"), na=False)
+        mask_titulo = ~licitacoes_df["titulo"].astype(str).str.contains(r"Licitação exemplo", case=False, na=False)
+        licitacoes_df = licitacoes_df[mask_portal & mask_num & mask_titulo]
+    except Exception:
+        pass
 
 if not licitacoes_df.empty:
     st.dataframe(licitacoes_df, use_container_width=True, height=400)
