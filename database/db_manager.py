@@ -247,3 +247,25 @@ class DatabaseManager:
         except Exception as e:
             print(f"Erro ao buscar documentos: {e}")
             return pd.DataFrame()
+
+    def cleanup_demo_data(self) -> int:
+        """Remove registros fictícios/demonstração da tabela licitacoes."""
+        if not self.conn:
+            return 0
+        try:
+            cursor = self.conn.cursor()
+            # Padrões comuns usados nos exemplos (LICE-..., COMP-...) e títulos de exemplo
+            cursor.execute("""
+                DELETE FROM licitacoes
+                WHERE
+                    numero ILIKE 'LICE-%'
+                    OR numero ILIKE 'COMP-%'
+                    OR titulo ILIKE 'Licitação exemplo%%'
+                    OR portal IN ('Licitações-e', 'Comprasnet', 'Portal de Compras Públicas')
+            """)
+            affected = cursor.rowcount
+            cursor.close()
+            return affected or 0
+        except Exception as e:
+            print(f"Erro ao limpar dados fictícios: {e}")
+            return 0

@@ -20,9 +20,8 @@ from scrapers.comprasnet_edital_downloader import baixar_e_registrar as comprasn
 from scrapers.pncp_to_comprasnet import extract_trio_from_pncp
 from scrapers.pncp_api_arquivos import baixar_todos_por_numero as pncp_api_baixar_todos
 import io
-import base64
-import streamlit.components.v1 as components
 import re
+import requests
 import os
 import base64
 import streamlit.components.v1 as components
@@ -50,27 +49,10 @@ with st.sidebar:
     st.header("⚙️ Configurações")
     
     # Seleção de portais
-    st.subheader("Escolha os portais de compras")
-    
+    st.subheader("Origem dos dados")
+    # Mantemos apenas PNCP como origem principal
     portais = {
-        "Comprasnet": st.checkbox("Comprasnet", value=True),
-        "Portal de Compras Públicas": st.checkbox("Portal de Compras Públicas"),
-        "Licitações-e": st.checkbox("Licitações-e"),
-        "Licitações Caixa": st.checkbox("Licitações Caixa"),
-        "Petrobras": st.checkbox("Petrobras"),
-        "Compras Amazonas": st.checkbox("COMPRAS AMAZONAS"),
-        "Comprasnet Goiás": st.checkbox("COMPRASNET GOIÁS"),
-        "Compras RJ": st.checkbox("COMPRAS RJ"),
-        "Compras Recife": st.checkbox("COMPRAS RECIFE"),
-        "Licitanet": st.checkbox("Licitanet"),
-        "BLL Compras": st.checkbox("BLL COMPRAS"),
-        "Portal e-LIC Santa Catarina": st.checkbox("PORTAL e-LIC - SANTA CATARINA"),
-        "Procergs": st.checkbox("PROCERGS"),
-        "Compras Minas Gerais": st.checkbox("COMPRAS MINAS GERAIS"),
-        "Banpará": st.checkbox("BANPARÁ"),
-        "PE Integrado": st.checkbox("PE Integrado"),
-        "BNC": st.checkbox("BNC"),
-        "PNCP": st.checkbox("Outros / PNCP"),
+        "PNCP": st.checkbox("PNCP", value=True),
     }
     
     st.markdown("---")
@@ -142,8 +124,10 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Botão de iniciar varredura
-    iniciar_varredura = st.button("🚀 Iniciar Varredura", type="primary", use_container_width=True)
+    # Botões de busca
+    iniciar_varredura = st.button("🚀 Iniciar Varredura (legado)", use_container_width=True)
+    buscar_pncp_btn = st.button("🔎 Buscar Licitações PNCP", use_container_width=True)
+    limpar_demo_btn = st.button("🧹 Limpar dados fictícios", use_container_width=True)
 
 # Main content
 col1, col2, col3 = st.columns(3)
@@ -159,7 +143,65 @@ with col3:
 
 st.markdown("---")
 
-# Executar varredura
+# Executar busca PNCP (consulta por período) - preferencial
+if buscar_pncp_btn:
+    try:
+        st.info("Consultando PNCP (consulta v1) ...")
+        base = "https://pncp.gov.br/api/consulta/v1/contratacoes"
+        resultados = []
+        for pagina in range(1, 6):
+            params = {
+                "pagina": pagina,
+                "tamanhoPagina": 50,
+                "dataInicial": data_inicial.strftime("%Y-%m-%d"),
+                "dataFinal": data_final.strftime("%Y-%m-%d"),
+            }
+            r = requests.get(base, params=params, timeout=60, headers={"User-Agent":"Mozilla/5.0"})
+            r.raise_for_status()
+            j = r.json()
+            data = j.get("data") if isinstance(j, dict) else []
+            if not data:
+                break
+            resultados.extend(data)
+            if len(data) < 50:
+                break
+        inseridos = 0
+        for it in resultados:
+            numero = it.get("numeroControlePNCP") or ""
+            objeto = it.get("objeto") or it.get("objetoCompra") or ""
+            orgao = ""
+            if isinstance(it.get("orgaoEntidade"), dict):
+                orgao = it["orgaoEntidade"].get("nome", "")
+            modalidade = it.get("modalidade") or it.get("modalidadeNome") or ""
+            situacao = it.get("situacao") or it.get("situacaoCompraNomePncp") or ""
+            lic = {
+                "numero": str(numero),
+                "titulo": (objeto[:500] if isinstance(objeto, str) else "Licitação PNCP"),
+                "orgao": orgao,
+                "portal": "PNCP",
+                "modalidade": str(modalidade),
+                "data_publicacao": datetime.now(),
+                "data_abertura": datetime.now(),
+                "valor_estimado": 0.0,
+                "status": str(situacao) or "Indefinido",
+                "descricao": objeto or "",
+                "link_edital": it.get("linkExterno") or "",
+                "palavra_chave": palavra_chave or "",
+            }
+            if db.insert_licitacao(lic):
+                inseridos += 1
+        st.success(f"✅ PNCP: {inseridos} registros inseridos/atualizados.")
+        st.rerun()
+    except Exception as e:
+        st.error(f"❌ Erro ao consultar PNCP: {e}")
+
+# Limpar dados fictícios
+if limpar_demo_btn:
+    removed = db.cleanup_demo_data()
+    st.success(f"✅ Registros fictícios removidos: {removed}")
+    st.rerun()
+
+# Executar varredura (legado)
 if iniciar_varredura:
     portais_selecionados = [nome for nome, selecionado in portais.items() if selecionado]
     
@@ -177,16 +219,7 @@ if iniciar_varredura:
             
             try:
                 # Aqui você chamaria o scraper específico de cada portal
-                if portal == "Comprasnet":
-                    scraper = ComprasnetScraper()
-                    resultados = scraper.buscar(palavra_chave, data_inicial, data_final, somente_abertas=somente_abertas)
-                elif portal == "Portal de Compras Públicas":
-                    scraper = PortalComprasScraper()
-                    resultados = scraper.buscar(palavra_chave, data_inicial, data_final)
-                elif portal == "Licitações-e":
-                    scraper = LicitacoesScraper()
-                    resultados = scraper.buscar(palavra_chave, data_inicial, data_final)
-                elif portal == "PNCP":
+                if portal == "PNCP":
                     scraper = Pncp14133Scraper()
                     resultados = scraper.buscar(palavra_chave, data_inicial, data_final)
                     # Baixar documentos PNCP (best-effort)
@@ -582,32 +615,18 @@ if not docs_df.empty:
     st.markdown("#### 💾 Baixar arquivo")
     for _, row in docs_df.iterrows():
         try:
-            with open(str(row["caminho_local"]), "rb") as f:
+            caminho_local = str(row["caminho_local"])
+            with open(caminho_local, "rb") as f:
                 st.download_button(
                     label=f"📥 {row['nome_arquivo']} ({row['portal']})",
                     data=f.read(),
                     file_name=row["nome_arquivo"],
                     mime="application/pdf",
-                    use_container_width=True
+                    use_container_width=True,
+                    key=f"dl_{int(row['id'])}"
                 )
-            # Botão de visualizar (inline)
-            if st.button(f"👁️ Visualizar {row['nome_arquivo']}", key=f"view_doc_{int(row['id'])}"):
-                st.session_state["doc_preview_path"] = str(row["caminho_local"])
         except Exception as e:
             st.warning(f"Arquivo não disponível: {row['caminho_local']}")
-    # Visualização embutida de PDF ao clicar no botão "Visualizar"
-    if "doc_preview_path" in st.session_state and st.session_state["doc_preview_path"]:
-        path = st.session_state["doc_preview_path"]
-        st.markdown("#### 👁️ Visualizar PDF")
-        try:
-            with open(path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("utf-8")
-            components.html(
-                f"<iframe src='data:application/pdf;base64,{b64}' width='100%' height='800px' style='border:none;'></iframe>",
-                height=820
-            )
-        except Exception:
-            st.warning(f"Não foi possível abrir o arquivo: {path}")
 else:
     st.info("ℹ️ Nenhum documento encontrado no banco.")
 
